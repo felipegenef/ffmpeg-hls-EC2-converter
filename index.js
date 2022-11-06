@@ -31,8 +31,10 @@ const s3 = new AWS.S3({
 });
 
 const ddb = new dynamoose.aws.ddb.DynamoDB({
-  accessKeyId: process.env.KEY_ID,
-  secretAccessKey: process.env.KEY_SECRET,
+  credentials: {
+    accessKeyId: process.env.KEY_ID,
+    secretAccessKey: process.env.KEY_SECRET,
+  },
   region: process.env.REGION,
 });
 dynamoose.aws.ddb.set(ddb);

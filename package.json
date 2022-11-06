@@ -4,10 +4,12 @@
   "main": "index.js",
   "license": "MIT",
   "dependencies": {
-    "@types/node": "^18.11.9",
     "aws-sdk": "^2.1248.0",
     "dotenv": "^16.0.3",
     "dynamoose": "^3.1.0",
     "string-argv": "^0.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^18.11.9"
   }
 }

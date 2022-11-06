@@ -54,33 +54,52 @@ const ec2Schema = new dynamoose.Schema({
   },
 });
 Ec2Table = dynamoose.model(process.env.DYNAMODB_TABLE, ec2Schema);
-async function main() {
+function main() {
   var meta = new AWS.MetadataService();
-  const Ec2Id = "i-000b215cbcc54b7c6";
-  // meta.request("/latest/meta-data/instance-id", async function (err, Ec2Id) {
-  const scriptData = await Ec2Table.get(Ec2Id);
-  console.log(scriptData);
-  const filename = scriptData.data.fileName;
-  const bucketName = scriptData.data.inputBucket;
-  const destinyBucket = scriptData.data.outPutBucket;
-  const readStream = s3
-    .getObject({ Bucket: bucketName, Key: filename })
-    .createReadStream();
+  // const Ec2Id = "i-03a298f717f7ff068";
+  meta.request("/latest/meta-data/instance-id", async function (err, Ec2Id) {
+    const scriptData = await Ec2Table.get(Ec2Id);
+    console.log(scriptData);
+    const filename = scriptData.data.fileName;
+    const bucketName = scriptData.data.inputBucket;
+    const destinyBucket = scriptData.data.outPutBucket;
+    try {
+      const readStream = s3
+        .getObject({ Bucket: bucketName, Key: filename })
+        .createReadStream();
 
-  const writeStream = fs.createWriteStream("./" + filename);
-  console.log("Writing S3 file on EBS...");
-  readStream.pipe(writeStream);
-  writeStream.on("finish", () => {
-    console.log("Finished process.\nStarting ffmpeg conversion...");
-    hlsConvert({ filename, destinyBucket, bucketName, Ec2Id });
+      const writeStream = fs.createWriteStream("./" + filename);
+      console.log("Writing S3 file on EBS...");
+      readStream.pipe(writeStream);
+      writeStream.on("finish", () => {
+        console.log("Finished process.\nStarting ffmpeg conversion...");
+        hlsConvert({ filename, destinyBucket, bucketName, Ec2Id });
+      });
+      let bytes = 0;
+      readStream.on("data", (data) => {
+        bytes += data.byteLength;
+        console.log("Downoaded " + (bytes / 1000000).toFixed(3) + "MB");
+      });
+    } catch (error) {
+      console.log("Error on function main, terminating instance...");
+      console.log(error);
+      await s3
+        .deleteObject({
+          Bucket: bucketName,
+          Key: filename,
+        })
+        .promise();
+      console.log("Deleting dynamoDb document for shuting down instance...");
+      // remover item do dynamodb
+      await Ec2Table.delete(Ec2Id);
+    }
   });
-
-  // });
 }
 
-function hlsConvert({ filename, destinyBucket, bucketName, Ec2Id }) {
-  fs.mkdirSync("./hls");
-  let args = parseArgsStringToArgv(`ffmpeg -i ${filename} \
+async function hlsConvert({ filename, destinyBucket, bucketName, Ec2Id }) {
+  try {
+    fs.mkdirSync("./hls");
+    let args = parseArgsStringToArgv(`ffmpeg -i ${filename} \
   -map 0:v:0 -map 0:a:0 \
   -map 0:v:0 -map 0:a:0 \
   -map 0:v:0 -map 0:a:0 \
@@ -99,69 +118,84 @@ function hlsConvert({ filename, destinyBucket, bucketName, Ec2Id }) {
   -hls_segment_size ${resolutionOptions[currentResolution].segmentSizeInMB}M -hls_list_size 0 -hls_flags  independent_segments  \
   -master_pl_name "auto.m3u8" \
   -y "./hls/%v.m3u8"`);
-  let cmd = args.shift();
-  const script = spawn(cmd, args);
-  script.stdout.setEncoding("utf8");
-  script.stderr.setEncoding("utf8");
-  script.stdout.on("data", function (data) {
-    console.log(data);
-  });
-  script.stderr.on("data", function (data) {
-    console.log(data);
-  });
-  script.on("exit", async function (code) {
-    console.log({ code });
-    console.log("Conversion Finished.\nStarting revision...");
-    const files = await fsp.readdir("./hls");
-    let biggerSize = 0;
-    // se der maior que 5mb fazer com 15s apagando o que ja existe
-    for (const file of files) {
-      const videoPath = path.resolve(__dirname, "./hls", file);
-      const data = await fsp.readFile(videoPath);
-      if (data.byteLength > biggerSize) {
-        console.log("Bigger file found until now:");
-        console.log(file);
-        console.log(data.byteLength);
-        biggerSize = data.byteLength;
-      }
-    }
-    if (biggerSize >= 5500000) {
+    let cmd = args.shift();
+    const script = spawn(cmd, args);
+    script.stdout.setEncoding("utf8");
+    script.stderr.setEncoding("utf8");
+    script.stdout.on("data", function (data) {
+      console.log(data);
+    });
+    script.stderr.on("data", function (data) {
+      console.log(data);
+    });
+    script.on("exit", async function (code) {
+      console.log({ code });
+      console.log("Conversion Finished.\nStarting revision...");
+      const files = await fsp.readdir("./hls");
+      let biggerSize = 0;
+      // se der maior que 5mb fazer com 15s apagando o que ja existe
       for (const file of files) {
-        await fsp.unlink(path.resolve(__dirname, "./hls", file));
+        const videoPath = path.resolve(__dirname, "./hls", file);
+        const data = await fsp.readFile(videoPath);
+        if (data.byteLength > biggerSize) {
+          console.log("Bigger file found until now:");
+          console.log(file);
+          console.log(data.byteLength);
+          biggerSize = data.byteLength;
+        }
       }
-      await fsp.rmdir(path.resolve(__dirname, "./hls"));
-      if (currentResolution == resolutionOptions.length - 1) {
-        console.log("Deleting input object...");
+      if (biggerSize >= 5500000) {
+        for (const file of files) {
+          await fsp.unlink(path.resolve(__dirname, "./hls", file));
+        }
+        await fsp.rmdir(path.resolve(__dirname, "./hls"));
+        if (currentResolution == resolutionOptions.length - 1) {
+          console.log("Deleting input object...");
+          await s3
+            .deleteObject({
+              Bucket: bucketName,
+              Key: filename,
+            })
+            .promise();
+          console.log(
+            "Deleting dynamoDb document for shuting down instance..."
+          );
+          // TODO: ENVIAR ERRRO VIA EMAIL
+          // remover item do dynamodb
+          await Ec2Table.delete(Ec2Id);
+        }
+        currentResolution++;
+        console.log("Revision Faild.\nRetrying with new resolution....\n");
+        console.log(resolutionOptions[currentResolution]);
+        return hlsConvert({ filename, destinyBucket, bucketName, Ec2Id });
+      }
+      console.log("Revision Finished.\nSending files to s3 output bucket");
+      let sentFilescounter = 0;
+      for (const file of files) {
+        sentFilescounter++;
         await s3
-          .deleteObject({
-            Bucket: bucketName,
-            Key: filename,
+          .putObject({
+            Bucket: destinyBucket,
+            Key: filename.split(".")[0] + "/" + file,
+            Body: fs.readFileSync("./hls/" + file),
           })
           .promise();
-        console.log("Deleting dynamoDb document for shuting down instance...");
-        // TODO: ENVIAR ERRRO VIA EMAIL
-        // remover item do dynamodb
-        await Ec2Table.delete(Ec2Id);
+        console.log(sentFilescounter + " of " + files.length + " sent.");
       }
-      currentResolution++;
-      console.log("Revision Faild.\nRetrying with new resolution....\n");
-      console.log(resolutionOptions[currentResolution]);
-      return hlsConvert({ filename, destinyBucket, bucketName, Ec2Id });
-    }
-    console.log("Revision Finished.\nSending files to s3 output bucket");
-    let sentFilescounter = 0;
-    for (const file of files) {
-      sentFilescounter++;
+      console.log("Deleting input object...");
       await s3
-        .putObject({
-          Bucket: destinyBucket,
-          Key: filename.split(".")[0] + "/" + file,
-          Body: fs.readFileSync("./hls/" + file),
+        .deleteObject({
+          Bucket: bucketName,
+          Key: filename,
         })
         .promise();
-      console.log(sentFilescounter + " of " + files.length + " sent.");
-    }
-    console.log("Deleting input object...");
+      console.log("Deleting dynamoDb document for shuting down instance...");
+      // remover item do dynamodb
+      await Ec2Table.delete(Ec2Id);
+    });
+  } catch (error) {
+    console.log("Error on function main, terminating instance...");
+    console.log(error);
     await s3
       .deleteObject({
         Bucket: bucketName,
@@ -171,6 +205,6 @@ function hlsConvert({ filename, destinyBucket, bucketName, Ec2Id }) {
     console.log("Deleting dynamoDb document for shuting down instance...");
     // remover item do dynamodb
     await Ec2Table.delete(Ec2Id);
-  });
+  }
 }
 main();

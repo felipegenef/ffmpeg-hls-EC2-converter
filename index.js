@@ -21,7 +21,7 @@ AWS.config.update({
     secretAccessKey: process.env.KEY_SECRET,
   },
 });
-
+var meta = new AWS.MetadataService();
 const s3 = new AWS.S3({
   region: process.env.REGION,
   credentials: {
@@ -55,7 +55,6 @@ const ec2Schema = new dynamoose.Schema({
 });
 Ec2Table = dynamoose.model(process.env.DYNAMODB_TABLE, ec2Schema);
 function main() {
-  var meta = new AWS.MetadataService();
   // const Ec2Id = "i-03a298f717f7ff068";
   meta.request("/latest/meta-data/instance-id", async function (err, Ec2Id) {
     const scriptData = await Ec2Table.get(Ec2Id);

@@ -9,10 +9,10 @@ var AWS = require("aws-sdk");
 
 let currentResolution = 0;
 const resolutionOptions = [
-  { preset: "ultrafast", crf: 28, segmentSizeInMB: 2 },
-  { preset: "veryfast", crf: 28, segmentSizeInMB: 2 },
-  { preset: "veryslow", crf: 22, segmentSizeInMB: 4 },
-  { preset: "veryslow", crf: 28, segmentSizeInMB: 3 },
+  { preset: "ultrafast", crf: 28, segmentSizeInMB: "500K" },
+  { preset: "veryfast", crf: 28, segmentSizeInMB: "1M" },
+  { preset: "veryslow", crf: 22, segmentSizeInMB: "2M" },
+  { preset: "veryslow", crf: 28, segmentSizeInMB: "2M" },
 ];
 AWS.config.update({
   region: process.env.REGION,
@@ -116,7 +116,7 @@ async function hlsConvert({ filename, destinyBucket, bucketName, Ec2Id }) {
   -filter:v:5 scale=w=1920:h=1080 -maxrate:v:5 4500k -b:a:5 192k \
   -var_stream_map "v:0,a:0,name:144p v:1,a:1,name:240p v:2,a:2,name:360p v:3,a:3,name:480p v:4,a:4,name:720p v:5,a:5,name:1080p" \
   -preset ${resolutionOptions[currentResolution].preset} -cpu-used 12 -threads 4 -f hls \
-  -hls_segment_size ${resolutionOptions[currentResolution].segmentSizeInMB}M -hls_list_size 0 -hls_flags  independent_segments  \
+  -hls_segment_size ${resolutionOptions[currentResolution].segmentSizeInMB} -hls_list_size 0 -hls_flags  independent_segments  \
   -master_pl_name "auto.m3u8" \
   -y "./hls/%v.m3u8"`);
     let cmd = args.shift();
